@@ -1,0 +1,38 @@
+name: 📊 Reporte de Productividad — Santa Fe
+
+on:
+  schedule:
+    # 8:00 AM CDT (UTC-6) = 14:00 UTC
+    - cron: '0 14 * * 1-5'   # Lunes a Viernes
+  workflow_dispatch:          # Permite ejecución manual desde GitHub Actions
+
+jobs:
+  generate-report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Instalar dependencias
+        run: |
+          cd scripts
+          npm install
+
+      - name: Generar y enviar reporte
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL_ID: C0B55J8C740
+          GH_PROJECT_NUMBER: 1
+          GH_PROJECT_OWNER: santafe-mx
+          GH_PROJECT_OWNER_TYPE: user   # 'user' o 'org'
+          REPORT_TITLE: "Santa Fe"
+          TZ: America/Mexico_City
+        run: node scripts/generate_report.js

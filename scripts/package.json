@@ -1,0 +1,12 @@
+{
+  "name": "santafe-productivity-report",
+  "version": "1.0.0",
+  "description": "Reporte diario de productividad — Santa Fe via GitHub Projects + Slack",
+  "main": "generate_report.js",
+  "scripts": {
+    "report": "node generate_report.js"
+  },
+  "dependencies": {
+    "node-fetch": "^3.3.2"
+  }
+}

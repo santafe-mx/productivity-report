@@ -1,7 +1,7 @@
 import fetch from 'node-fetch';
 
 const GH_TOKEN=process.env.GH_TOKEN,SLACK_BOT_TOKEN=process.env.SLACK_BOT_TOKEN,SLACK_CHANNEL_ID=process.env.SLACK_CHANNEL_ID||'C0B55J8C740',PROJECT_NUMBER=parseInt(process.env.GH_PROJECT_NUMBER||'1'),PROJECT_OWNER=process.env.GH_PROJECT_OWNER||'santafe-mx',PROJECT_OWNER_TYPE=process.env.GH_PROJECT_OWNER_TYPE||'user',REPORT_TITLE=process.env.REPORT_TITLE||'Santa Fe';
-const ST={BL:'Backlog',SB:'Sprint Backlog',IP:'In progress',RT:'Ready to test',RP:'Ready for production',IR:'In review',DN:'Done'};
+const ST={BL:'Backlog',SB:'Sprint Backlog',IP:'In progress',RT:'Ready to test (UAT)',RP:'Ready for production',IR:'In review',DN:'Done'};
 const SEV=new Set(['S1 - Critico','S2 - Media','S3 - Baja (Mejora)','S1','S2','S3']);
 function labels(ls=[]){const s=[],e=[],a=[];for(const l of ls){if(SEV.has(l))s.push(l);else if(l.endsWith('PRY'))e.push(l);else a.push(l);}return{sev:s,ent:e,act:a};}
 function weekRange(){const n=new Date(),d=n.getDay(),m=new Date(n);m.setDate(n.getDate()-(d===0?6:d-1));m.setHours(0,0,0,0);const s=new Date(m);s.setDate(m.getDate()+6);s.setHours(23,59,59,999);return{m,s};}

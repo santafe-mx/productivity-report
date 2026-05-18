@@ -1,34 +1,64 @@
 // generate_report.js — Reporte de Productividad Santa Fe
-// Lee GitHub Project vía GraphQL y envía reporte a Slack
-// Estimate se registra directamente en HORAS (sin conversión)
-// Labels: S1/S2/S3 = severidad | termina en PRY = entidad/proyecto | resto = tipo de actividad
+// Estimate en horas directas (sin conversión)
+// Labels: S1/S2/S3 = severidad | termina en PRY = entidad | resto = tipo actividad
+// Semana corriente: filtrada por campo "Iteración" que coincide con la semana calendario actual
 
 import fetch from 'node-fetch';
 
-// ─── Configuración desde variables de entorno ───────────────────────────────
-const GH_TOKEN            = process.env.GH_TOKEN;
-const SLACK_BOT_TOKEN     = process.env.SLACK_BOT_TOKEN;
-const SLACK_CHANNEL_ID    = process.env.SLACK_CHANNEL_ID    || 'C0B55J8C740';
-const PROJECT_NUMBER      = parseInt(process.env.GH_PROJECT_NUMBER || '1');
-const PROJECT_OWNER       = process.env.GH_PROJECT_OWNER    || 'santafe-mx';
-const PROJECT_OWNER_TYPE  = process.env.GH_PROJECT_OWNER_TYPE || 'user'; // 'user' o 'org'
-const REPORT_TITLE        = process.env.REPORT_TITLE        || 'Santa Fe';
+// ─── Configuración ───────────────────────────────────────────────────────────
+const GH_TOKEN           = process.env.GH_TOKEN;
+const SLACK_BOT_TOKEN    = process.env.SLACK_BOT_TOKEN;
+const SLACK_CHANNEL_ID   = process.env.SLACK_CHANNEL_ID     || 'C0B55J8C740';
+const PROJECT_NUMBER     = parseInt(process.env.GH_PROJECT_NUMBER || '1');
+const PROJECT_OWNER      = process.env.GH_PROJECT_OWNER     || 'santafe-mx';
+const PROJECT_OWNER_TYPE = process.env.GH_PROJECT_OWNER_TYPE || 'user';
+const REPORT_TITLE       = process.env.REPORT_TITLE         || 'Santa Fe';
 
-// ─── Clasificación de Labels ─────────────────────────────────────────────────
+// ─── Statuses definidos ──────────────────────────────────────────────────────
+const STATUS = {
+  BACKLOG:       'Backlog',
+  SPRINT_BACKLOG:'Sprint Backlog',
+  IN_PROGRESS:   'In Progress',
+  READY_TEST:    'Ready to Test',
+  READY_PROD:    'Ready for Production',
+  IN_REVIEW:     'In Review',
+  DONE:          'Done',
+};
+const ALL_STATUSES = Object.values(STATUS);
+
+// ─── Clasificación de Labels ──────────────────────────────────────────────────
 const SEVERITIES = new Set(['S1', 'S2', 'S3']);
 function classifyLabels(labels = []) {
-  const severity     = [];
-  const entities     = [];
-  const activityType = [];
+  const severity = [], entities = [], activityType = [];
   for (const l of labels) {
-    if (SEVERITIES.has(l))       severity.push(l);
-    else if (l.endsWith('PRY'))  entities.push(l);
-    else                         activityType.push(l);
+    if (SEVERITIES.has(l))      severity.push(l);
+    else if (l.endsWith('PRY')) entities.push(l);
+    else                        activityType.push(l);
   }
   return { severity, entities, activityType };
 }
 
-// ─── Query GraphQL paginada ─────────────────────────────────────────────────
+// ─── Semana calendario actual ─────────────────────────────────────────────────
+function getCurrentWeekRange() {
+  const now = new Date();
+  const day = now.getDay();
+  const monday = new Date(now);
+  monday.setDate(now.getDate() - (day === 0 ? 6 : day - 1));
+  monday.setHours(0, 0, 0, 0);
+  const sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 6);
+  sunday.setHours(23, 59, 59, 999);
+  return { monday, sunday };
+}
+
+function isCurrentWeekIteration(startDate) {
+  if (!startDate) return false;
+  const { monday, sunday } = getCurrentWeekRange();
+  const d = new Date(startDate);
+  return d >= monday && d <= sunday;
+}
+
+// ─── Query GraphQL paginada ───────────────────────────────────────────────────
 function buildQuery(ownerType, cursor = null) {
   const afterClause = cursor ? `, after: "${cursor}"` : '';
   const ownerQuery  = ownerType === 'org'
@@ -95,10 +125,10 @@ function buildQuery(ownerType, cursor = null) {
   }`;
 }
 
-// ─── Llamada a GitHub GraphQL ───────────────────────────────────────────────
+// ─── GitHub GraphQL ───────────────────────────────────────────────────────────
 async function ghQuery(query) {
   const res = await fetch('https://api.github.com/graphql', {
-    method:  'POST',
+    method: 'POST',
     headers: {
       'Authorization': `bearer ${GH_TOKEN}`,
       'Content-Type':  'application/json',
@@ -106,50 +136,46 @@ async function ghQuery(query) {
     body: JSON.stringify({ query }),
   });
   const json = await res.json();
-  if (json.errors) throw new Error(JSON.stringify(json.errors));
+  if (json.errors) {
+    console.error('GraphQL errors:', JSON.stringify(json.errors, null, 2));
+    throw new Error(json.errors[0]?.message || JSON.stringify(json.errors));
+  }
+  if (!json.data) throw new Error('GitHub no devolvió datos. Verifica el token y permisos.');
   return json.data;
 }
 
-// ─── Extracción completa con paginación ────────────────────────────────────
+// ─── Extracción paginada ──────────────────────────────────────────────────────
 async function fetchAllItems() {
-  let allItems = [];
-  let cursor   = null;
-  let hasNext  = true;
-  let projectTitle = '';
-
+  let allItems = [], cursor = null, hasNext = true, projectTitle = '';
   while (hasNext) {
     const data    = await ghQuery(buildQuery(PROJECT_OWNER_TYPE, cursor));
     const owner   = data.organization || data.user;
     const project = owner?.projectV2;
-
     if (!project) throw new Error(`No se encontró Project #${PROJECT_NUMBER} en ${PROJECT_OWNER}`);
-
-    projectTitle = project.title;
-    const page   = project.items;
-
-    allItems = allItems.concat(page.nodes);
-    hasNext  = page.pageInfo.hasNextPage;
-    cursor   = page.pageInfo.endCursor;
-
+    projectTitle  = project.title;
+    const page    = project.items;
+    allItems      = allItems.concat(page.nodes);
+    hasNext       = page.pageInfo.hasNextPage;
+    cursor        = page.pageInfo.endCursor;
     console.log(`  → Página extraída: ${allItems.length} items acumulados`);
   }
-
   return { items: allItems, projectTitle };
 }
 
-// ─── Parseo de un item — campos Santa Fe ────────────────────────────────────
+// ─── Parseo de item ───────────────────────────────────────────────────────────
 function parseItem(node) {
   const fields = {};
   for (const fv of node.fieldValues?.nodes || []) {
     const fname = fv.field?.name;
     if (!fname) continue;
-    if (fv.name   !== undefined) fields[fname] = fv.name;
-    if (fv.number !== undefined) fields[fname] = fv.number;
-    if (fv.text   !== undefined) fields[fname] = fv.text;
-    if (fv.date   !== undefined) fields[fname] = fv.date;
-    if (fv.title  !== undefined) fields[fname] = fv.title;   // Iteración
-    if (fv.startDate !== undefined) fields[`${fname}__start`] = fv.startDate; // Iteración startDate
-    if (fv.users  !== undefined) fields[fname] = fv.users.nodes.map(u => u.login).join(', ');
+    if (fv.name      !== undefined) fields[fname]             = fv.name;
+    if (fv.number    !== undefined) fields[fname]             = fv.number;
+    if (fv.text      !== undefined) fields[fname]             = fv.text;
+    if (fv.date      !== undefined) fields[fname]             = fv.date;
+    if (fv.title     !== undefined) fields[fname]             = fv.title;
+    if (fv.startDate !== undefined) fields[`${fname}__start`] = fv.startDate;
+    if (fv.duration  !== undefined) fields[`${fname}__dur`]   = fv.duration;
+    if (fv.users     !== undefined) fields[fname]             = fv.users.nodes.map(u => u.login).join(', ');
   }
 
   const content   = node.content || {};
@@ -157,68 +183,70 @@ function parseItem(node) {
   const rawLabels = content.labels?.nodes?.map(l => l.name)    || [];
   const { severity, entities, activityType } = classifyLabels(rawLabels);
 
-  // Estimate viene en horas directamente (sin conversión)
-  const hrs = Number(fields['Estimate (hrs)'] || fields['Estimate'] || 0);
+  const hrs           = Number(fields['Estimate (hrs)'] || fields['Estimate'] || 0);
+  const iterTitle     = fields['Iteración']        || fields['Iteration']       || null;
+  const iterStartDate = fields['Iteración__start'] || fields['Iteration__start'] || null;
 
   return {
     title:        content.title || '(sin título)',
     status:       fields['Status']       || 'No definido',
-    hrs,                                                  // horas directas
-    iteracion:    fields['Iteración']    || fields['Iteration'] || 'Sin sprint',
-    reportedDate: fields['Reported Date']|| null,
-    startDate:    fields['Start Date']   || null,
-    plannedDate:  fields['Planned date'] || fields['Planned Date'] || null,
-    realDate:     fields['Real Date']    || null,
-    assignees:    assignees.length ? assignees : ['Sin asignar'],
-    severity:     severity.length  ? severity  : [],
-    entities:     entities.length  ? entities  : ['Sin entidad'],
+    hrs,
+    iterTitle,
+    iterStartDate,
+    reportedDate: fields['Reported Date'] || null,
+    startDate:    fields['Start Date']    || null,
+    plannedDate:  fields['Planned date']  || fields['Planned Date'] || null,
+    realDate:     fields['Real Date']     || null,
+    refDate:      fields['Reported Date'] || content.createdAt || null,
+    assignees:    assignees.length    ? assignees    : ['Sin asignar'],
+    severity:     severity.length     ? severity     : [],
+    entities:     entities.length     ? entities     : ['Sin entidad'],
     activityType: activityType.length ? activityType : ['Sin tipo'],
-    state:        content.state    || 'OPEN',
-    closedAt:     content.closedAt || null,
-    createdAt:    content.createdAt|| null,
+    state:        content.state       || 'OPEN',
+    closedAt:     content.closedAt    || null,
+    createdAt:    content.createdAt   || null,
   };
 }
 
-// ─── Análisis y agrupación — Santa Fe ──────────────────────────────────────
+// ─── Análisis ─────────────────────────────────────────────────────────────────
 function analyzeItems(rawItems) {
-  const items = rawItems.map(parseItem);
+  const now   = new Date();
+  const start = new Date(`${now.getFullYear()}-01-01T00:00:00`);
 
-  const now       = new Date();
-  const dayOfWeek = now.getDay();
-  const monday    = new Date(now);
-  monday.setDate(now.getDate() - (dayOfWeek === 0 ? 6 : dayOfWeek - 1));
-  monday.setHours(0, 0, 0, 0);
-
-  const isDone    = s => ['Done', 'Cerrado', 'Closed', 'Completado'].includes(s);
-  const isBlocked = s => ['Blocked', 'Bloqueado'].includes(s);
-
-  const weekItems = items.filter(i => {
-    const d = i.realDate    ? new Date(i.realDate)
-            : i.closedAt    ? new Date(i.closedAt)
-            : i.createdAt   ? new Date(i.createdAt)
-            : null;
-    return d && d >= monday;
+  // Filtro anual por Reported Date o createdAt
+  const items = rawItems.map(parseItem).filter(i => {
+    const d = i.refDate ? new Date(i.refDate) : null;
+    return !d || d >= start;
   });
 
-  // Agrupación genérica por campo — acumula horas directas
+  // Indicadores por status
+  function statusIndicator(list) {
+    const map = {};
+    for (const s of ALL_STATUSES) map[s] = { count: 0, hrs: 0 };
+    map['Otros'] = { count: 0, hrs: 0 };
+    for (const item of list) {
+      const key = ALL_STATUSES.includes(item.status) ? item.status : 'Otros';
+      map[key].count += 1;
+      map[key].hrs   += Number(item.hrs) || 0;
+    }
+    return map;
+  }
+
+  // Agrupación genérica
   function groupBy(list, key) {
     const map = {};
     for (const item of list) {
       const vals = Array.isArray(item[key]) ? item[key] : [item[key]];
       for (const v of vals) {
-        if (!map[v]) map[v] = { done: 0, pending: 0, blocked: 0, total: 0, count: 0 };
-        const h = Number(item.hrs) || 0;
-        map[v].total += h;
+        if (!map[v]) map[v] = { count: 0, hrs: 0 };
         map[v].count += 1;
-        if (isDone(item.status))         map[v].done    += h;
-        else if (isBlocked(item.status)) map[v].blocked += h;
-        else                             map[v].pending += h;
+        map[v].hrs   += Number(item.hrs) || 0;
       }
     }
     return map;
   }
 
-  // Distribución por severidad
+  // Severidades
   function severityCount(list) {
     const map = { S1: 0, S2: 0, S3: 0 };
     for (const item of list) {
@@ -229,91 +257,64 @@ function analyzeItems(rawItems) {
     return map;
   }
 
-  const year = {
-    total:        items.length,
-    totalHrs:     items.reduce((s, i) => s + (Number(i.hrs) || 0), 0),
-    done:         items.filter(i => isDone(i.status)).length,
-    blocked:      items.filter(i => isBlocked(i.status)).length,
-    byAssignee:   groupBy(items, 'assignees'),
-    byEntity:     groupBy(items, 'entities'),
-    byActivity:   groupBy(items, 'activityType'),
-    bySeverity:   severityCount(items),
-  };
+  // Semana corriente por iteración
+  const weekItems = items.filter(i => isCurrentWeekIteration(i.iterStartDate));
+  const weekRange = getCurrentWeekRange();
 
-  const week = {
-    total:        weekItems.length,
-    totalHrs:     weekItems.reduce((s, i) => s + (Number(i.hrs) || 0), 0),
-    done:         weekItems.filter(i => isDone(i.status)).length,
-    blocked:      weekItems.filter(i => isBlocked(i.status)).length,
-    byAssignee:   groupBy(weekItems, 'assignees'),
-    byEntity:     groupBy(weekItems, 'entities'),
-    bySeverity:   severityCount(weekItems),
+  return {
+    yearTotal:      items.length,
+    yearHrs:        items.reduce((s, i) => s + (Number(i.hrs) || 0), 0),
+    yearByStatus:   statusIndicator(items),
+    yearSeverity:   severityCount(items),
+    weekRange,
+    weekTotal:      weekItems.length,
+    weekHrs:        weekItems.reduce((s, i) => s + (Number(i.hrs) || 0), 0),
+    weekByStatus:   statusIndicator(weekItems),
+    weekByActivity: groupBy(weekItems, 'activityType'),
+    weekByAssignee: groupBy(weekItems, 'assignees'),
+    weekSeverity:   severityCount(weekItems),
   };
-
-  return { year, week };
 }
 
-// ─── Formateo de Slack — Santa Fe ──────────────────────────────────────────
-function formatSlackReport(projectTitle, stats) {
-  const { year, week } = stats;
+// ─── Formato Slack ────────────────────────────────────────────────────────────
+function fmt(count, hrs) {
+  return `*${count}* tareas · *${hrs}h*`;
+}
+
+function formatSlackReport(projectTitle, s) {
   const now     = new Date();
   const dateStr = now.toLocaleDateString('es-MX', { weekday:'long', year:'numeric', month:'long', day:'numeric' });
-  const yearPct = year.total ? Math.round((year.done / year.total) * 100) : 0;
+  const mondayStr = s.weekRange.monday.toLocaleDateString('es-MX', { day:'2-digit', month:'short' });
+  const sundayStr = s.weekRange.sunday.toLocaleDateString('es-MX', { day:'2-digit', month:'short' });
 
-  // Top assignees
-  const topAssignees = Object.entries(year.byAssignee)
-    .sort((a, b) => b[1].total - a[1].total).slice(0, 6);
+  const ys   = s.yearByStatus;
+  const ws   = s.weekByStatus;
+  const sev  = s.yearSeverity;
+  const sevW = s.weekSeverity;
 
-  // Top entidades
-  const topEntities = Object.entries(year.byEntity)
-    .sort((a, b) => b[1].total - a[1].total).slice(0, 5);
+  // Actividades semana (sin "Sin tipo")
+  const actRows = Object.entries(s.weekByActivity)
+    .filter(([k]) => k !== 'Sin tipo')
+    .sort((a, b) => b[1].hrs - a[1].hrs)
+    .map(([name, d]) => `  • ${name}: *${d.count}* tareas · *${d.hrs}h*`)
+    .join('\n');
 
-  // Top actividades
-  const topActivity = Object.entries(year.byActivity)
-    .sort((a, b) => b[1].total - a[1].total).slice(0, 5);
-
-  // Severidades acumulado
-  const sev = year.bySeverity;
-  const sevWeek = week.bySeverity;
-
-  // Filas assignees
-  const assigneeRows = topAssignees.map(([name, d]) => {
-    const pct = d.total ? Math.round((d.done / d.total) * 100) : 0;
-    const bar = '█'.repeat(Math.round(pct / 10)) + '░'.repeat(10 - Math.round(pct / 10));
-    return `  • *${name}*: ${d.done}h ✓ / ${d.total}h total  ${bar} ${pct}%`;
-  }).join('\n');
-
-  const entityRows = topEntities.map(([name, d]) => {
-    const pct = d.total ? Math.round((d.done / d.total) * 100) : 0;
-    return `  • *${name}*: ${d.done}h ✓ / ${d.pending}h ⏳ — ${pct}%`;
-  }).join('\n');
-
-  const activityRows = topActivity
-    .map(([name, d]) => `  • ${name}: ${d.total}h (${d.count} tareas)`).join('\n');
-
-  // Semana — assignees
-  const weekAssigneeRows = Object.entries(week.byAssignee)
-    .sort((a, b) => b[1].total - a[1].total).slice(0, 5)
-    .map(([name, d]) => `  • *${name}*: ${d.total}h (${d.count} tareas)`)
+  // Assignees semana
+  const assigneeRows = Object.entries(s.weekByAssignee)
+    .sort((a, b) => b[1].hrs - a[1].hrs)
+    .map(([name, d]) => `  • *${name}*: ${d.count} tareas · ${d.hrs}h`)
     .join('\n');
 
   // Alertas
   const alerts = [];
-  if (sev.S1 > 0)       alerts.push(`🔴 *${sev.S1} defecto(s) S1* en el acumulado — atención inmediata.`);
-  if (sevWeek.S1 > 0)   alerts.push(`🔴 *${sevWeek.S1} defecto(s) S1 esta semana* — escalar.`);
-  if (year.blocked > 0) alerts.push(`🚫 *${year.blocked} tarea(s) bloqueadas* — requieren seguimiento.`);
-  for (const [name, d] of topAssignees) {
-    const pct = d.total ? Math.round((d.done / d.total) * 100) : 0;
-    if (pct < 60 && d.count > 2) alerts.push(`⚠️ *${name}* con ${pct}% completitud — revisar carga.`);
-  }
-  for (const [name, d] of topEntities) {
-    const pct = d.total ? Math.round((d.done / d.total) * 100) : 0;
-    if (pct < 50 && d.count > 3) alerts.push(`🔴 *${name}*: solo ${pct}% avance — revisar con el equipo.`);
-  }
+  if (sev.S1 > 0)  alerts.push(`🔴 *${sev.S1} defecto(s) S1* en el acumulado — atención inmediata.`);
+  if (sevW.S1 > 0) alerts.push(`🔴 *${sevW.S1} S1 esta semana* — escalar de inmediato.`);
+  const donePct = s.yearTotal ? Math.round((ys[STATUS.DONE].count / s.yearTotal) * 100) : 0;
+  if (donePct < 50) alerts.push(`⚠️ Completitud anual en *${donePct}%* — revisar avance general.`);
 
   const alertSection = alerts.length
-    ? `\n*⚡ Alertas*\n${alerts.join('\n')}`
-    : '\n✅ Sin alertas críticas esta semana.';
+    ? `*⚡ Alertas*\n${alerts.join('\n')}`
+    : '✅ Sin alertas críticas.';
 
   return [
     `📊 *Reporte de Productividad — ${REPORT_TITLE}*`,
@@ -321,84 +322,79 @@ function formatSlackReport(projectTitle, stats) {
     `_Proyecto: ${projectTitle}_`,
     '',
     `━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
-    `📅 *ACUMULADO ${now.getFullYear()}*`,
+    `📅 *INDICADORES GLOBALES ${now.getFullYear()} · ${s.yearTotal} tareas · ${s.yearHrs}h*`,
     `━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
-    `  Tareas: *${year.total}* total · *${year.done}* Done · *${year.blocked}* bloqueadas`,
-    `  Horas registradas: *${year.totalHrs}h*`,
-    `  Completitud: *${yearPct}%*`,
-    `  Severidades: 🔴 S1: ${sev.S1}  🟡 S2: ${sev.S2}  🟢 S3: ${sev.S3}`,
-    '',
-    `*👤 Por responsable (Top ${topAssignees.length})*`,
-    assigneeRows || '  Sin datos',
-    '',
-    `*🏢 Por entidad/proyecto*`,
-    entityRows || '  Sin datos',
-    '',
-    `*⚡ Por tipo de actividad*`,
-    activityRows || '  Sin datos',
+    `  📋 Backlog:              ${fmt(ys[STATUS.BACKLOG].count,        ys[STATUS.BACKLOG].hrs)}`,
+    `  📌 Sprint Backlog:       ${fmt(ys[STATUS.SPRINT_BACKLOG].count, ys[STATUS.SPRINT_BACKLOG].hrs)}`,
+    `  🔄 In Progress:          ${fmt(ys[STATUS.IN_PROGRESS].count,   ys[STATUS.IN_PROGRESS].hrs)}`,
+    `  🔍 In Review:            ${fmt(ys[STATUS.IN_REVIEW].count,     ys[STATUS.IN_REVIEW].hrs)}`,
+    `  🧪 Ready to Test:        ${fmt(ys[STATUS.READY_TEST].count,    ys[STATUS.READY_TEST].hrs)}`,
+    `  🚀 Ready for Production: ${fmt(ys[STATUS.READY_PROD].count,    ys[STATUS.READY_PROD].hrs)}`,
+    `  ✅ Done:                 ${fmt(ys[STATUS.DONE].count,          ys[STATUS.DONE].hrs)}`,
+    `  Severidades año: 🔴 S1: ${sev.S1}  🟡 S2: ${sev.S2}  🟢 S3: ${sev.S3}`,
     '',
     `━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
-    `🗓 *SEMANA ACTUAL*`,
+    `🗓 *SEMANA CORRIENTE · ${mondayStr} – ${sundayStr} · ${s.weekTotal} tareas · ${s.weekHrs}h*`,
     `━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
-    `  Tareas: *${week.total}* · Done: *${week.done}* · Horas: *${week.totalHrs}h*`,
-    `  Severidades semana: 🔴 S1: ${sevWeek.S1}  🟡 S2: ${sevWeek.S2}  🟢 S3: ${sevWeek.S3}`,
-    weekAssigneeRows ? `\n*👤 Por responsable*\n${weekAssigneeRows}` : '',
+    `  📌 Sprint Backlog:       ${fmt(ws[STATUS.SPRINT_BACKLOG].count, ws[STATUS.SPRINT_BACKLOG].hrs)}`,
+    `  🔄 In Progress:          ${fmt(ws[STATUS.IN_PROGRESS].count,   ws[STATUS.IN_PROGRESS].hrs)}`,
+    `  🧪 Ready to Test:        ${fmt(ws[STATUS.READY_TEST].count,    ws[STATUS.READY_TEST].hrs)}`,
+    `  🚀 Ready for Production: ${fmt(ws[STATUS.READY_PROD].count,    ws[STATUS.READY_PROD].hrs)}`,
+    `  ✅ Done:                 ${fmt(ws[STATUS.DONE].count,          ws[STATUS.DONE].hrs)}`,
+    `  Severidades semana: 🔴 S1: ${sevW.S1}  🟡 S2: ${sevW.S2}  🟢 S3: ${sevW.S3}`,
+    '',
+    `*⚡ Por tipo de actividad — semana*`,
+    actRows || '  Sin actividades registradas esta semana',
+    '',
+    `*👤 Por responsable — semana*`,
+    assigneeRows || '  Sin asignaciones esta semana',
+    '',
     alertSection,
     '',
     `_Fuente: GitHub Project #${PROJECT_NUMBER} · Generado automáticamente · ${REPORT_TITLE}_`,
-  ].filter(l => l !== undefined).join('\n');
+  ].join('\n');
 }
 
-// ─── Envío a Slack ──────────────────────────────────────────────────────────
+// ─── Envío a Slack ────────────────────────────────────────────────────────────
 async function sendToSlack(text) {
   const res = await fetch('https://slack.com/api/chat.postMessage', {
-    method:  'POST',
+    method: 'POST',
     headers: {
       'Authorization': `Bearer ${SLACK_BOT_TOKEN}`,
       'Content-Type':  'application/json',
     },
-    body: JSON.stringify({
-      channel: SLACK_CHANNEL_ID,
-      text,
-      mrkdwn: true,
-    }),
+    body: JSON.stringify({ channel: SLACK_CHANNEL_ID, text, mrkdwn: true }),
   });
   const json = await res.json();
   if (!json.ok) throw new Error(`Slack error: ${json.error}`);
   return json;
 }
 
-// ─── Main ───────────────────────────────────────────────────────────────────
+// ─── Main ─────────────────────────────────────────────────────────────────────
 async function main() {
-  console.log(`\n🚀 Iniciando reporte de productividad — ${REPORT_TITLE}`);
-  console.log(`   Project #${PROJECT_NUMBER} de ${PROJECT_OWNER} (${PROJECT_OWNER_TYPE})`);
+  console.log(`\n🚀 Iniciando reporte — ${REPORT_TITLE}`);
+  console.log(`   Project #${PROJECT_NUMBER} · ${PROJECT_OWNER} (${PROJECT_OWNER_TYPE})`);
   console.log(`   Slack → ${SLACK_CHANNEL_ID}\n`);
 
   try {
-    // 1. Extraer todos los items del proyecto
     console.log('📥 Extrayendo items de GitHub Project...');
     const { items, projectTitle } = await fetchAllItems();
-    console.log(`   ✓ ${items.length} items extraídos del proyecto "${projectTitle}"`);
+    console.log(`   ✓ ${items.length} items extraídos · "${projectTitle}"`);
 
-    // 2. Analizar
     console.log('🔢 Analizando datos...');
     const stats = analyzeItems(items);
-    console.log(`   ✓ Año: ${stats.year.total} tareas | Semana: ${stats.week.total} tareas`);
+    console.log(`   ✓ Año: ${stats.yearTotal} tareas | Semana: ${stats.weekTotal} tareas`);
 
-    // 3. Formatear
     const message = formatSlackReport(projectTitle, stats);
 
-    // 4. Enviar a Slack
     console.log('📤 Enviando a Slack...');
     await sendToSlack(message);
-    console.log(`   ✓ Reporte enviado exitosamente a ${SLACK_CHANNEL_ID}`);
-
+    console.log(`   ✓ Reporte enviado a ${SLACK_CHANNEL_ID}`);
     console.log('\n✅ Proceso completado.');
   } catch (err) {
-    console.error('\n❌ Error en el proceso:', err.message);
-    // Notificar el error también a Slack
+    console.error('\n❌ Error:', err.message);
     try {
-      await sendToSlack(`❌ *Error en reporte de productividad — ${REPORT_TITLE}*\n\`${err.message}\``);
+      await sendToSlack(`❌ *Error en reporte — ${REPORT_TITLE}*\n\`${err.message}\``);
     } catch (_) {}
     process.exit(1);
   }

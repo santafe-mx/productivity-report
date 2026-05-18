@@ -288,6 +288,7 @@ async function main() {
     console.log('🔢 Analizando...');
     const stats = analyzeItems(items);
     console.log(`   ✓ Año: ${stats.yearTotal} | Semana: ${stats.weekTotal}`);
+    console.log('DEBUG yearByStatus:', JSON.stringify(stats.yearByStatus));
     const message = formatSlackReport(projectTitle, stats);
     console.log('📤 Enviando a Slack...');
     await sendToSlack(message);

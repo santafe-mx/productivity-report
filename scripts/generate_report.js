@@ -221,25 +221,14 @@ function formatSlackReport(projectTitle, s) {
   const ws      = s.weekByStatus;
   const sev     = s.yearSeverity;
   const sevW    = s.weekSeverity;
-
-  const actRows = Object.entries(s.weekByActivity)
-    .filter(([k]) => k !== 'Sin tipo')
-    .sort((a, b) => b[1].hrs - a[1].hrs)
-    .map(([n, d]) => `  * ${n}: *${d.count}* tareas · *${d.hrs}h*`)
-    .join('\n');
-
-  const asgRows = Object.entries(s.weekByAssignee)
-    .sort((a, b) => b[1].hrs - a[1].hrs)
-    .map(([n, d]) => `  * *${n}*: ${d.count} tareas · ${d.hrs}h`)
-    .join('\n');
-
+  const actRows = Object.entries(s.weekByActivity).filter(([k]) => k !== 'Sin tipo').sort((a,b) => b[1].hrs - a[1].hrs).map(([n,d]) => `  • ${n}: *${d.count}* tareas · *${d.hrs}h*`).join('\n');
+  const asgRows = Object.entries(s.weekByAssignee).sort((a,b) => b[1].hrs - a[1].hrs).map(([n,d]) => `  • *${n}*: ${d.count} tareas · ${d.hrs}h`).join('\n');
   const alerts = [];
-  if (sev.S1 > 0)  alerts.push(`🔴 *${sev.S1} S1* en acumulado — atencion inmediata.`);
+  if (sev.S1 > 0) alerts.push(`🔴 *${sev.S1} S1* en acumulado.`);
   if (sevW.S1 > 0) alerts.push(`🔴 *${sevW.S1} S1 esta semana* — escalar.`);
   const dp = s.yearTotal ? Math.round((ys[STATUS.DONE].count / s.yearTotal) * 100) : 0;
   if (dp < 50) alerts.push(`⚠️ Completitud anual *${dp}%* — revisar avance.`);
   const al = alerts.length ? `*Alertas*\n${alerts.join('\n')}` : '✅ Sin alertas criticas.';
-
   return [
     `📊 *Reporte de Productividad — ${REPORT_TITLE}*`,
     `_${dateStr} · GitHub Project #${PROJECT_NUMBER} · Esfuerzo en horas_`,
@@ -248,23 +237,23 @@ function formatSlackReport(projectTitle, s) {
     `━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
     `📅 *INDICADORES GLOBALES ${now.getFullYear()} · ${s.yearTotal} tareas · ${s.yearHrs}h*`,
     `━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
-    `  📋 Backlog:              ${fmt(ys[STATUS.BACKLOG].count,        ys[STATUS.BACKLOG].hrs)}`,
+    `  📋 Backlog:              ${fmt(ys[STATUS.BACKLOG].count, ys[STATUS.BACKLOG].hrs)}`,
     `  📌 Sprint Backlog:       ${fmt(ys[STATUS.SPRINT_BACKLOG].count, ys[STATUS.SPRINT_BACKLOG].hrs)}`,
-    `  🔄 In Progress:          ${fmt(ys[STATUS.IN_PROGRESS].count,   ys[STATUS.IN_PROGRESS].hrs)}`,
-    `  🔍 In Review:            ${fmt(ys[STATUS.IN_REVIEW].count,     ys[STATUS.IN_REVIEW].hrs)}`,
-    `  🧪 Ready to Test:        ${fmt(ys[STATUS.READY_TEST].count,    ys[STATUS.READY_TEST].hrs)}`,
-    `  🚀 Ready for Production: ${fmt(ys[STATUS.READY_PROD].count,    ys[STATUS.READY_PROD].hrs)}`,
-    `  ✅ Done:                 ${fmt(ys[STATUS.DONE].count,          ys[STATUS.DONE].hrs)}`,
+    `  🔄 In Progress:          ${fmt(ys[STATUS.IN_PROGRESS].count, ys[STATUS.IN_PROGRESS].hrs)}`,
+    `  🔍 In Review:            ${fmt(ys[STATUS.IN_REVIEW].count, ys[STATUS.IN_REVIEW].hrs)}`,
+    `  🧪 Ready to Test:        ${fmt(ys[STATUS.READY_TEST].count, ys[STATUS.READY_TEST].hrs)}`,
+    `  🚀 Ready for Production: ${fmt(ys[STATUS.READY_PROD].count, ys[STATUS.READY_PROD].hrs)}`,
+    `  ✅ Done:                 ${fmt(ys[STATUS.DONE].count, ys[STATUS.DONE].hrs)}`,
     `  Severidades año: 🔴 S1: ${sev.S1}  🟡 S2: ${sev.S2}  🟢 S3: ${sev.S3}`,
     ``,
     `━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
     `🗓 *SEMANA CORRIENTE · ${ms} – ${ss} · ${s.weekTotal} tareas · ${s.weekHrs}h*`,
     `━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
     `  📌 Sprint Backlog:       ${fmt(ws[STATUS.SPRINT_BACKLOG].count, ws[STATUS.SPRINT_BACKLOG].hrs)}`,
-    `  🔄 In Progress:          ${fmt(ws[STATUS.IN_PROGRESS].count,   ws[STATUS.IN_PROGRESS].hrs)}`,
-    `  🧪 Ready to Test:        ${fmt(ws[STATUS.READY_TEST].count,    ws[STATUS.READY_TEST].hrs)}`,
-    `  🚀 Ready for Production: ${fmt(ws[STATUS.READY_PROD].count,    ws[STATUS.READY_PROD].hrs)}`,
-    `  ✅ Done:                 ${fmt(ws[STATUS.DONE].count,          ws[STATUS.DONE].hrs)}`,
+    `  🔄 In Progress:          ${fmt(ws[STATUS.IN_PROGRESS].count, ws[STATUS.IN_PROGRESS].hrs)}`,
+    `  🧪 Ready to Test:        ${fmt(ws[STATUS.READY_TEST].count, ws[STATUS.READY_TEST].hrs)}`,
+    `  🚀 Ready for Production: ${fmt(ws[STATUS.READY_PROD].count, ws[STATUS.READY_PROD].hrs)}`,
+    `  ✅ Done:                 ${fmt(ws[STATUS.DONE].count, ws[STATUS.DONE].hrs)}`,
     `  Severidades semana: 🔴 S1: ${sevW.S1}  🟡 S2: ${sevW.S2}  🟢 S3: ${sevW.S3}`,
     ``,
     `*Por tipo de actividad — semana*`,

@@ -1,3 +1,4 @@
+// v6 severidades fix
 import fetch from 'node-fetch';
 
 const GH_TOKEN=process.env.GH_TOKEN,SLACK_BOT_TOKEN=process.env.SLACK_BOT_TOKEN,SLACK_CHANNEL_ID=process.env.SLACK_CHANNEL_ID||'C0B55J8C740',PROJECT_NUMBER=parseInt(process.env.GH_PROJECT_NUMBER||'1'),PROJECT_OWNER=process.env.GH_PROJECT_OWNER||'santafe-mx',PROJECT_OWNER_TYPE=process.env.GH_PROJECT_OWNER_TYPE||'user',REPORT_TITLE=process.env.REPORT_TITLE||'Santa Fe';
